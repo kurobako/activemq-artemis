@@ -44,7 +44,6 @@ import org.apache.activemq.artemis.core.server.ServerMessage;
 import org.apache.activemq.artemis.jms.client.ActiveMQDestination;
 
 public class AMQConsumer implements BrowserListener {
-
    private AMQSession session;
    private org.apache.activemq.command.ActiveMQDestination actualDest;
    private ConsumerInfo info;
@@ -52,7 +51,7 @@ public class AMQConsumer implements BrowserListener {
    private long nativeId = -1;
    private SimpleString subQueueName = null;
 
-   private final int prefetchSize;
+   private int prefetchSize;
    private AtomicInteger windowAvailable;
    private final java.util.Queue<MessageInfo> deliveringRefs = new ConcurrentLinkedQueue<>();
    private long messagePullSequence = 0;
@@ -220,7 +219,7 @@ public class AMQConsumer implements BrowserListener {
       else if (ack.isRedeliveredAck()) {
          //client tells that this message is for redlivery.
          //do nothing until poisoned.
-         n = 1;
+         n = ack.getMessageCount();
       }
       else if (ack.isPoisonAck()) {
          //send to dlq
@@ -251,7 +250,7 @@ public class AMQConsumer implements BrowserListener {
       }
       else if (ack.isDeliveredAck() || ack.isExpiredAck()) {
          //ToDo: implement with tests
-         n = 1;
+         n = ack.getMessageCount();
       }
       else {
          Iterator<MessageInfo> iter = deliveringRefs.iterator();
@@ -372,6 +371,15 @@ public class AMQConsumer implements BrowserListener {
 
    public org.apache.activemq.command.ActiveMQDestination getActualDestination() {
       return actualDest;
+   }
+
+   public void setPrefetchSize(int prefetchSize) {
+      this.prefetchSize = prefetchSize;
+      this.windowAvailable.set(prefetchSize);
+      this.info.setPrefetchSize(prefetchSize);
+      if (this.prefetchSize > 0) {
+         session.getCoreSession().promptDelivery(nativeId);
+      }
    }
 
    private class MessagePullHandler {

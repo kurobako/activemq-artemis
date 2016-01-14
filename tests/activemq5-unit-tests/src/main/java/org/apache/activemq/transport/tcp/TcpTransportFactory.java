@@ -20,6 +20,7 @@ import java.io.IOException;
 import java.net.URI;
 import java.net.URISyntaxException;
 import java.net.UnknownHostException;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.Map;
 
@@ -29,6 +30,7 @@ import javax.net.SocketFactory;
 import org.apache.activemq.TransportLoggerSupport;
 import org.apache.activemq.artemiswrapper.ArtemisBrokerHelper;
 import org.apache.activemq.broker.BrokerRegistry;
+import org.apache.activemq.broker.BrokerService;
 import org.apache.activemq.openwire.OpenWireFormat;
 import org.apache.activemq.transport.*;
 import org.apache.activemq.util.IOExceptionSupport;
@@ -54,11 +56,10 @@ public class TcpTransportFactory extends TransportFactory {
       //here check broker, if no broker, we start one
       Map<String, String> params = URISupport.parseParameters(location);
       String brokerId = params.remove("invmBrokerId");
-      params.clear();
-      location = URISupport.createRemainingURI(location, params);
-      if (brokerService == null) {
+      URI location1 = URISupport.createRemainingURI(location, Collections.EMPTY_MAP);
+      if (brokerService == null && !BrokerService.disableWrapper) {
 
-         ArtemisBrokerHelper.startArtemisBroker(location);
+         ArtemisBrokerHelper.startArtemisBroker(location1);
          brokerService = location.toString();
 
          if (brokerId != null) {
@@ -66,7 +67,8 @@ public class TcpTransportFactory extends TransportFactory {
             System.out.println("bound: " + brokerId);
          }
       }
-      return super.doConnect(location);
+      URI location2 = URISupport.createRemainingURI(location, params);
+      return super.doConnect(location2);
    }
 
    @Override

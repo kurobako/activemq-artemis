@@ -16,6 +16,7 @@
  */
 package org.apache.activemq.broker.artemiswrapper;
 
+import java.io.File;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Iterator;
@@ -46,20 +47,16 @@ public class ArtemisBrokerWrapper extends ArtemisBrokerBase {
    protected final Map<String, SimpleString> testQueues = new HashMap<>();
    protected JMSServerManagerImpl jmsServer;
 
-   public ArtemisBrokerWrapper(BrokerService brokerService) {
+   public ArtemisBrokerWrapper(BrokerService brokerService, File temporaryFolder) {
+      super(temporaryFolder);
       this.bservice = brokerService;
    }
 
    @Override
    public void start() throws Exception {
-      testDir = temporaryFolder.getRoot().getAbsolutePath();
       clearDataRecreateServerDirs();
       server = createServer(realStore, true);
       server.getConfiguration().getAcceptorConfigurations().clear();
-      HashMap<String, Object> params = new HashMap<>();
-      params.put(TransportConstants.PORT_PROP_NAME, "61616");
-      params.put(TransportConstants.PROTOCOLS_PROP_NAME, "OPENWIRE,CORE");
-      TransportConfiguration transportConfiguration = new TransportConfiguration(NETTY_ACCEPTOR_FACTORY, params);
 
       Configuration serverConfig = server.getConfiguration();
 
@@ -82,9 +79,11 @@ public class ArtemisBrokerWrapper extends ArtemisBrokerBase {
       commonSettings.setDeadLetterAddress(dla);
       commonSettings.setAutoCreateJmsQueues(true);
 
-      serverConfig.getAcceptorConfigurations().add(transportConfiguration);
+      HashMap<String, Object> params = new HashMap<String, Object>();
+      if (bservice.extraConnectors.size() == 0) {
+         serverConfig.addAcceptorConfiguration("home", "tcp://localhost:61616?protocols=OPENWIRE,CORE");
+      }
       if (this.bservice.enableSsl()) {
-         params = new HashMap<>();
          params.put(TransportConstants.SSL_ENABLED_PROP_NAME, true);
          params.put(TransportConstants.PORT_PROP_NAME, 61611);
          params.put(TransportConstants.PROTOCOLS_PROP_NAME, "OPENWIRE");
@@ -102,14 +101,7 @@ public class ArtemisBrokerWrapper extends ArtemisBrokerBase {
       }
 
       for (Integer port : bservice.extraConnectors) {
-         if (port.intValue() != 61616) {
-            //extra port
-            params = new HashMap<>();
-            params.put(TransportConstants.PORT_PROP_NAME, port.intValue());
-            params.put(TransportConstants.PROTOCOLS_PROP_NAME, "OPENWIRE");
-            TransportConfiguration extraTransportConfiguration = new TransportConfiguration(NETTY_ACCEPTOR_FACTORY, params);
-            serverConfig.getAcceptorConfigurations().add(extraTransportConfiguration);
-         }
+         serverConfig.addAcceptorConfiguration("homePort" + port, "tcp://localhost:" + port + "?protocols=OPENWIRE,CORE");
       }
 
       serverConfig.setSecurityEnabled(enableSecurity);

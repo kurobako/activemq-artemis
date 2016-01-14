@@ -60,10 +60,13 @@ public class TCPTransportConfigurationSchema extends AbstractTransportConfigurat
                                                                          String factoryName) throws URISyntaxException {
       HashMap<String, Object> props = new HashMap<>();
 
-      setData(uri, props, allowableProperties, query);
+      Map<String, Object> extraProps = new HashMap<>();
+      setData(uri, props, allowableProperties, query, extraProps);
       List<TransportConfiguration> transportConfigurations = new ArrayList<>();
 
-      transportConfigurations.add(new TransportConfiguration(factoryName, props, name));
+      TransportConfiguration config = new TransportConfiguration(factoryName, props, name, extraProps);
+
+      transportConfigurations.add(config);
       String connectors = uri.getFragment();
 
       if (connectors != null && !connectors.trim().isEmpty()) {
@@ -71,9 +74,10 @@ public class TCPTransportConfigurationSchema extends AbstractTransportConfigurat
          for (String s : split) {
             URI extraUri = new URI(s);
             HashMap<String, Object> newProps = new HashMap<>();
-            setData(extraUri, newProps, allowableProperties, query);
-            setData(extraUri, newProps, allowableProperties, parseQuery(extraUri.getQuery(), null));
-            transportConfigurations.add(new TransportConfiguration(factoryName, newProps, name + ":" + extraUri.toString()));
+            extraProps = new HashMap<>();
+            setData(extraUri, newProps, allowableProperties, query, extraProps);
+            setData(extraUri, newProps, allowableProperties, parseQuery(extraUri.getQuery(), null), extraProps);
+            transportConfigurations.add(new TransportConfiguration(factoryName, newProps, name + ":" + extraUri.toString(), extraProps));
          }
       }
       return transportConfigurations;

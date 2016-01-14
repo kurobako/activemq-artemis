@@ -29,7 +29,7 @@
 
    <properties>
       <activemq.basedir>${project.basedir}/../..</activemq.basedir>
-      <activemq5.project.version>5.11.1</activemq5.project.version>
+      <activemq5.project.version>5.12.0</activemq5.project.version>
       <jmdns-version>3.4.1</jmdns-version>
       <ftpserver-version>1.0.6</ftpserver-version>
       <jmock-version>2.5.1</jmock-version>
@@ -43,6 +43,7 @@
       <jasypt-version>1.9.2</jasypt-version>
       <directory-version>2.0.0-M6</directory-version>
       <activeio-core-version>3.1.4</activeio-core-version>
+      <byteman.version>2.2.0</byteman.version>
 
    </properties>
 
@@ -58,13 +59,6 @@
          <groupId>org.apache.activemq</groupId>
          <artifactId>activemq-jaas</artifactId>
          <version>${activemq5.project.version}</version>
-      </dependency>
-
-      <dependency>
-         <groupId>org.apache.activemq</groupId>
-         <artifactId>activemq-broker</artifactId>
-         <version>${activemq5.project.version}</version>
-         <type>test-jar</type>
       </dependency>
 
       <dependency>
@@ -312,6 +306,35 @@
          <groupId>org.apache.activemq</groupId>
          <artifactId>artemis-openwire-protocol</artifactId>
          <version>${project.version}</version>
+      </dependency>
+      <dependency>
+         <groupId>org.jboss.byteman</groupId>
+         <artifactId>byteman</artifactId>
+         <version>${byteman.version}</version>
+      </dependency>
+      <dependency>
+         <groupId>org.jboss.byteman</groupId>
+         <artifactId>byteman-submit</artifactId>
+         <scope>test</scope>
+         <version>${byteman.version}</version>
+      </dependency>
+      <dependency>
+         <groupId>org.jboss.byteman</groupId>
+         <artifactId>byteman-install</artifactId>
+         <scope>test</scope>
+         <version>${byteman.version}</version>
+      </dependency>
+      <dependency>
+         <groupId>org.jboss.byteman</groupId>
+         <artifactId>byteman-bmunit</artifactId>
+         <scope>test</scope>
+         <version>${byteman.version}</version>
+         <exclusions>
+            <exclusion>
+               <groupId>org.testng</groupId>
+               <artifactId>testng</artifactId>
+            </exclusion>
+         </exclusions>
       </dependency>
 
    </dependencies>

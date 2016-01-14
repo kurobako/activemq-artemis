@@ -21,6 +21,7 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.Iterator;
+import java.util.LinkedList;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -37,6 +38,8 @@ import org.apache.activemq.artemis.api.core.ActiveMQBuffer;
 import org.apache.activemq.artemis.api.core.BaseInterceptor;
 import org.apache.activemq.artemis.api.core.Interceptor;
 import org.apache.activemq.artemis.api.core.SimpleString;
+import org.apache.activemq.artemis.api.core.client.ClusterTopologyListener;
+import org.apache.activemq.artemis.api.core.client.TopologyMember;
 import org.apache.activemq.artemis.api.core.management.CoreNotificationType;
 import org.apache.activemq.artemis.api.core.management.ManagementHelper;
 import org.apache.activemq.artemis.core.io.IOCallback;
@@ -52,6 +55,8 @@ import org.apache.activemq.artemis.core.security.CheckType;
 import org.apache.activemq.artemis.core.server.ActiveMQServer;
 import org.apache.activemq.artemis.core.server.ActiveMQServerLogger;
 import org.apache.activemq.artemis.core.server.Queue;
+import org.apache.activemq.artemis.core.server.cluster.ClusterConnection;
+import org.apache.activemq.artemis.core.server.cluster.ClusterManager;
 import org.apache.activemq.artemis.core.server.management.ManagementService;
 import org.apache.activemq.artemis.core.server.management.Notification;
 import org.apache.activemq.artemis.core.server.management.NotificationListener;
@@ -70,15 +75,15 @@ import org.apache.activemq.command.ActiveMQTopic;
 import org.apache.activemq.command.BrokerId;
 import org.apache.activemq.command.BrokerInfo;
 import org.apache.activemq.command.Command;
-import org.apache.activemq.command.CommandTypes;
+import org.apache.activemq.command.ConnectionControl;
 import org.apache.activemq.command.ConnectionId;
 import org.apache.activemq.command.ConnectionInfo;
+import org.apache.activemq.command.ConsumerControl;
 import org.apache.activemq.command.ConsumerId;
 import org.apache.activemq.command.ConsumerInfo;
 import org.apache.activemq.command.DestinationInfo;
 import org.apache.activemq.command.MessageDispatch;
 import org.apache.activemq.command.MessageId;
-import org.apache.activemq.command.MessagePull;
 import org.apache.activemq.command.ProducerId;
 import org.apache.activemq.command.ProducerInfo;
 import org.apache.activemq.command.RemoveSubscriptionInfo;
@@ -97,7 +102,7 @@ import org.apache.activemq.util.IdGenerator;
 import org.apache.activemq.util.InetAddressUtil;
 import org.apache.activemq.util.LongSequenceGenerator;
 
-public class OpenWireProtocolManager implements ProtocolManager<Interceptor>, NotificationListener {
+public class OpenWireProtocolManager implements ProtocolManager<Interceptor>, NotificationListener, ClusterTopologyListener {
 
    private static final IdGenerator BROKER_ID_GENERATOR = new IdGenerator();
    private static final IdGenerator ID_GENERATOR = new IdGenerator();
@@ -122,16 +127,24 @@ public class OpenWireProtocolManager implements ProtocolManager<Interceptor>, No
    private final CopyOnWriteArrayList<OpenWireConnection> connections = new CopyOnWriteArrayList<>();
 
    protected final ConcurrentMap<ConnectionId, ConnectionInfo> connectionInfos = new ConcurrentHashMap<>();
-
-   private final Map<String, AMQConnectionContext> clientIdSet = new HashMap<>();
+   // Clebert TODO: use ConcurrentHashMap, or maybe use the schema that's already available on Artemis upstream (unique-client-id)
+   private final Map<String, AMQConnectionContext> clientIdSet = new HashMap<String, AMQConnectionContext>();
 
    private String brokerName;
 
+   // Clebert TODO: Artemis already stores the Session. Why do we need a different one here
    private Map<SessionId, AMQSession> sessions = new ConcurrentHashMap<>();
 
+   // Clebert: Artemis already has a Resource Manager. Need to remove this..
+   //          The TransactionID extends XATransactionID, so all we need is to convert the XID here
    private Map<TransactionId, AMQSession> transactions = new ConcurrentHashMap<>();
 
+   // Clebert: Artemis session has meta-data support, perhaps we could reuse it here
    private Map<String, SessionId> sessionIdMap = new ConcurrentHashMap<>();
+
+   private final Map<String, TopologyMember> topologyMap = new ConcurrentHashMap<>();
+
+   private final LinkedList<TopologyMember> members = new LinkedList<>();
 
    private final ScheduledExecutorService scheduledPool;
 
@@ -148,6 +161,37 @@ public class OpenWireProtocolManager implements ProtocolManager<Interceptor>, No
          service.addNotificationListener(this);
       }
 
+      final ClusterManager clusterManager = this.server.getClusterManager();
+      ClusterConnection cc = clusterManager.getDefaultConnection(null);
+      if (cc != null) {
+         cc.addClusterTopologyListener(this);
+      }
+   }
+
+   @Override
+   public void nodeUP(TopologyMember member, boolean last) {
+      if (topologyMap.put(member.getNodeId(), member) == null) {
+         updateClientClusterInfo();
+      }
+   }
+
+   public void nodeDown(long eventUID, String nodeID) {
+      if (topologyMap.remove(nodeID) != null) {
+         updateClientClusterInfo();
+      }
+   }
+
+   private void updateClientClusterInfo() {
+
+      synchronized (members) {
+         members.clear();
+         members.addAll(topologyMap.values());
+      }
+
+      for (OpenWireConnection c : this.connections) {
+         ConnectionControl control = newConnectionControl(c.isRebalance());
+         c.updateClient(control);
+      }
    }
 
    @Override
@@ -172,6 +216,7 @@ public class OpenWireProtocolManager implements ProtocolManager<Interceptor>, No
       OpenWireConnection owConn = new OpenWireConnection(acceptorUsed, connection, this, wf);
       owConn.init();
 
+      // TODO CLEBERT What is this constant here? we should get it from TTL initial pings
       return new ConnectionEntry(owConn, null, System.currentTimeMillis(), 1 * 60 * 1000);
    }
 
@@ -229,28 +274,6 @@ public class OpenWireProtocolManager implements ProtocolManager<Interceptor>, No
 
    }
 
-   public void handleCommand(OpenWireConnection openWireConnection, Object command) throws Exception {
-      Command amqCmd = (Command) command;
-      byte type = amqCmd.getDataStructureType();
-      switch (type) {
-         case CommandTypes.CONNECTION_INFO:
-            break;
-         case CommandTypes.CONNECTION_CONTROL:
-            /** The ConnectionControl packet sent from client informs the broker that is capable of supporting dynamic
-             * failover and load balancing.  These features are not yet implemented for Artemis OpenWire.  Instead we
-             * simply drop the packet.  See: ACTIVEMQ6-108 */
-            break;
-         case CommandTypes.MESSAGE_PULL:
-            MessagePull messagePull = (MessagePull) amqCmd;
-            openWireConnection.processMessagePull(messagePull);
-            break;
-         case CommandTypes.CONSUMER_CONTROL:
-            break;
-         default:
-            throw new IllegalStateException("Cannot handle command: " + command);
-      }
-   }
-
    public void sendReply(final OpenWireConnection connection, final Command command) {
       server.getStorageManager().afterCompleteOperations(new IOCallback() {
          @Override
@@ -287,50 +310,50 @@ public class OpenWireProtocolManager implements ProtocolManager<Interceptor>, No
       }
    }
 
-   public void addConnection(AMQConnectionContext context, ConnectionInfo info) throws Exception {
+   public void addConnection(OpenWireConnection connection, ConnectionInfo info) throws Exception {
       String username = info.getUserName();
       String password = info.getPassword();
 
       if (!this.validateUser(username, password)) {
          throw new SecurityException("User name [" + username + "] or password is invalid.");
       }
+
       String clientId = info.getClientId();
       if (clientId == null) {
          throw new InvalidClientIDException("No clientID specified for connection request");
       }
+
       synchronized (clientIdSet) {
-         AMQConnectionContext oldContext = clientIdSet.get(clientId);
-         if (oldContext != null) {
-            if (context.isAllowLinkStealing()) {
-               clientIdSet.remove(clientId);
-               if (oldContext.getConnection() != null) {
-                  OpenWireConnection connection = oldContext.getConnection();
-                  connection.disconnect(true);
-               }
-               else {
-                  // log error
-               }
+         AMQConnectionContext context;
+         context = clientIdSet.get(clientId);
+         if (context != null) {
+            if (info.isFailoverReconnect()) {
+               OpenWireConnection oldConnection = context.getConnection();
+               oldConnection.disconnect(true);
+               connections.remove(oldConnection);
+               connection.reconnect(context, info);
             }
             else {
-               throw new InvalidClientIDException("Broker: " + getBrokerName() + " - Client: " + clientId + " already connected from " + oldContext.getConnection().getRemoteAddress());
+               throw new InvalidClientIDException("Broker: " + getBrokerName() + " - Client: " + clientId + " already connected from " + context.getConnection().getRemoteAddress());
             }
          }
          else {
+            //new connection
+            context = connection.initContext(info);
             clientIdSet.put(clientId, context);
          }
+
+         connections.add(connection);
+
+         ActiveMQTopic topic = AdvisorySupport.getConnectionAdvisoryTopic();
+         // do not distribute passwords in advisory messages. usernames okay
+         ConnectionInfo copy = info.copy();
+         copy.setPassword("");
+         fireAdvisory(context, topic, copy);
+
+         // init the conn
+         addSessions(context.getConnection(), context.getConnectionState().getSessionIds());
       }
-
-      connections.add(context.getConnection());
-
-      ActiveMQTopic topic = AdvisorySupport.getConnectionAdvisoryTopic();
-      // do not distribute passwords in advisory messages. usernames okay
-      ConnectionInfo copy = info.copy();
-      copy.setPassword("");
-      fireAdvisory(context, topic, copy);
-      connectionInfos.put(copy.getConnectionId(), copy);
-
-      // init the conn
-      addSessions(context.getConnection(), context.getConnectionState().getSessionIds());
    }
 
    private void fireAdvisory(AMQConnectionContext context, ActiveMQTopic topic, Command copy) throws Exception {
@@ -338,6 +361,7 @@ public class OpenWireProtocolManager implements ProtocolManager<Interceptor>, No
    }
 
    public BrokerId getBrokerId() {
+      // TODO: Use the Storage ID here...
       if (brokerId == null) {
          brokerId = new BrokerId(BROKER_ID_GENERATOR.generateId());
       }
@@ -398,6 +422,40 @@ public class OpenWireProtocolManager implements ProtocolManager<Interceptor>, No
       return brokerName;
    }
 
+   protected ConnectionControl newConnectionControl(boolean rebalance) {
+      ConnectionControl control = new ConnectionControl();
+
+      String uri = generateMembersURI(rebalance);
+      control.setConnectedBrokers(uri);
+
+      control.setRebalanceConnection(rebalance);
+      return control;
+   }
+
+   private String generateMembersURI(boolean flip) {
+      String uri;
+      StringBuffer connectedBrokers = new StringBuffer();
+      String separator = "";
+
+      synchronized (members) {
+         if (members.size() > 0) {
+            for (TopologyMember member : members) {
+               connectedBrokers.append(separator).append(member.toURI());
+               separator = ",";
+            }
+
+            // The flip exists to guarantee even distribution of URIs when sent to the client
+            // in case of failures you won't get all the connections failing to a single server.
+            if (flip && members.size() > 1) {
+               members.addLast(members.removeFirst());
+            }
+         }
+      }
+
+      uri = connectedBrokers.toString();
+      return uri;
+   }
+
    public boolean isFaultTolerantConfiguration() {
       return false;
    }
@@ -448,10 +506,9 @@ public class OpenWireProtocolManager implements ProtocolManager<Interceptor>, No
             if (destination.isQueue()) {
                OpenWireUtil.validateDestination(destination, amqSession);
             }
-            DestinationInfo destInfo = new DestinationInfo(theConn.getConext().getConnectionId(), DestinationInfo.ADD_OPERATION_TYPE, destination);
+            DestinationInfo destInfo = new DestinationInfo(theConn.getContext().getConnectionId(), DestinationInfo.ADD_OPERATION_TYPE, destination);
             this.addDestination(theConn, destInfo);
          }
-
 
          amqSession.createProducer(info);
 
@@ -464,6 +521,12 @@ public class OpenWireProtocolManager implements ProtocolManager<Interceptor>, No
 
       }
 
+   }
+
+   public void updateConsumer(OpenWireConnection theConn, ConsumerControl consumerControl) {
+      SessionId sessionId = consumerControl.getConsumerId().getParentId();
+      AMQSession amqSession = sessions.get(sessionId);
+      amqSession.updateConsumerPrefetchSize(consumerControl.getConsumerId(), consumerControl.getPrefetch());
    }
 
    public void addConsumer(OpenWireConnection theConn, ConsumerInfo info) throws Exception {
@@ -519,13 +582,23 @@ public class OpenWireProtocolManager implements ProtocolManager<Interceptor>, No
       return amqSession;
    }
 
-   public void removeConnection(AMQConnectionContext context, ConnectionInfo info, Throwable error) {
-      // todo roll back tx
-      this.connections.remove(context.getConnection());
-      this.connectionInfos.remove(info.getConnectionId());
-      String clientId = info.getClientId();
-      if (clientId != null) {
-         this.clientIdSet.remove(clientId);
+   public void removeConnection(OpenWireConnection connection,
+                                ConnectionInfo info,
+                                Throwable error) throws InvalidClientIDException {
+      synchronized (clientIdSet) {
+         String clientId = info.getClientId();
+         if (clientId != null) {
+            AMQConnectionContext context = this.clientIdSet.get(clientId);
+            if (context != null && context.decRefCount() == 0) {
+               //connection is still there and need to close
+               this.clientIdSet.remove(clientId);
+               connection.disconnect(error != null);
+               this.connections.remove(connection);//what's that for?
+            }
+         }
+         else {
+            throw new InvalidClientIDException("No clientID specified for connection disconnect request");
+         }
       }
    }
 
@@ -568,7 +641,7 @@ public class OpenWireProtocolManager implements ProtocolManager<Interceptor>, No
       }
 
       if (!AdvisorySupport.isAdvisoryTopic(dest)) {
-         AMQConnectionContext context = connection.getConext();
+         AMQConnectionContext context = connection.getContext();
          DestinationInfo advInfo = new DestinationInfo(context.getConnectionId(), DestinationInfo.REMOVE_OPERATION_TYPE, dest);
 
          ActiveMQTopic topic = AdvisorySupport.getDestinationAdvisoryTopic(dest);
@@ -598,7 +671,7 @@ public class OpenWireProtocolManager implements ProtocolManager<Interceptor>, No
       }
 
       if (!AdvisorySupport.isAdvisoryTopic(dest)) {
-         AMQConnectionContext context = connection.getConext();
+         AMQConnectionContext context = connection.getContext();
          DestinationInfo advInfo = new DestinationInfo(context.getConnectionId(), DestinationInfo.ADD_OPERATION_TYPE, dest);
 
          ActiveMQTopic topic = AdvisorySupport.getDestinationAdvisoryTopic(dest);
@@ -720,7 +793,7 @@ public class OpenWireProtocolManager implements ProtocolManager<Interceptor>, No
          ActiveMQMessage advisoryMessage = new ActiveMQMessage();
          advisoryMessage.setStringProperty(AdvisorySupport.MSG_PROPERTY_CONSUMER_ID, consumer.getId().toString());
 
-         fireAdvisory(cc.getConext(), topic, advisoryMessage, consumer.getId());
+         fireAdvisory(cc.getContext(), topic, advisoryMessage, consumer.getId());
       }
    }
 

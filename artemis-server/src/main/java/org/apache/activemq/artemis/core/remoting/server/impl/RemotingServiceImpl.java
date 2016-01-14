@@ -248,7 +248,7 @@ public class RemotingServiceImpl implements RemotingService, ConnectionLifeCycle
 
             ClusterConnection clusterConnection = lookupClusterConnection(info);
 
-            Acceptor acceptor = factory.createAcceptor(info.getName(), clusterConnection, info.getParams(), new DelegatingBufferHandler(), this, threadPool, scheduledThreadPool, supportedProtocols.isEmpty() ? protocolMap : supportedProtocols);
+            Acceptor acceptor = factory.createAcceptor(info.getName(), clusterConnection, info.getAllParams(), new DelegatingBufferHandler(), this, threadPool, scheduledThreadPool, supportedProtocols.isEmpty() ? protocolMap : supportedProtocols);
 
             if (defaultInvmSecurityPrincipal != null && acceptor.isUnsecurable()) {
                acceptor.setDefaultActiveMQPrincipal(defaultInvmSecurityPrincipal);

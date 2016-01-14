@@ -16,6 +16,7 @@
  */
 package org.apache.activemq.artemis.core.protocol.openwire;
 
+import javax.jms.InvalidClientIDException;
 import javax.jms.InvalidDestinationException;
 import javax.jms.JMSSecurityException;
 import javax.jms.ResourceAllocationException;
@@ -54,8 +55,8 @@ import org.apache.activemq.artemis.spi.core.remoting.Acceptor;
 import org.apache.activemq.artemis.spi.core.remoting.Connection;
 import org.apache.activemq.artemis.spi.core.remoting.ReadyListener;
 import org.apache.activemq.artemis.utils.ConcurrentHashSet;
+import org.apache.activemq.artemis.utils.ConfigurationHelper;
 import org.apache.activemq.command.ActiveMQDestination;
-import org.apache.activemq.command.ActiveMQMessage;
 import org.apache.activemq.command.BrokerInfo;
 import org.apache.activemq.command.Command;
 import org.apache.activemq.command.ConnectionControl;
@@ -79,7 +80,6 @@ import org.apache.activemq.command.MessagePull;
 import org.apache.activemq.command.ProducerAck;
 import org.apache.activemq.command.ProducerId;
 import org.apache.activemq.command.ProducerInfo;
-import org.apache.activemq.command.RemoveInfo;
 import org.apache.activemq.command.RemoveSubscriptionInfo;
 import org.apache.activemq.command.Response;
 import org.apache.activemq.command.SessionId;
@@ -100,6 +100,7 @@ import org.apache.activemq.wireformat.WireFormat;
 
 /**
  * Represents an activemq connection.
+ * ToDo: extends AbstractRemotingConnection
  */
 public class OpenWireConnection implements RemotingConnection, CommandVisitor, SecurityAuth {
 
@@ -121,7 +122,7 @@ public class OpenWireConnection implements RemotingConnection, CommandVisitor, S
 
    private final Acceptor acceptorUsed;
 
-   private OpenWireFormat wireFormat;
+   private final OpenWireFormat wireFormat;
 
    private AMQConnectionContext context;
 
@@ -150,6 +151,12 @@ public class OpenWireConnection implements RemotingConnection, CommandVisitor, S
 
    private volatile AMQSession advisorySession;
 
+   private String defaultSocketURIString;
+
+   private boolean rebalance;
+   private boolean updateClusterClients;
+   private boolean updateClusterClientsOnRemove;
+
    public OpenWireConnection(Acceptor acceptorUsed,
                              Connection connection,
                              OpenWireProtocolManager openWireProtocolManager,
@@ -159,6 +166,13 @@ public class OpenWireConnection implements RemotingConnection, CommandVisitor, S
       this.acceptorUsed = acceptorUsed;
       this.wireFormat = wf;
       this.creationTime = System.currentTimeMillis();
+      this.defaultSocketURIString = connection.getLocalAddress();
+
+      //Clebert: These are parameters specific to openwire cluster with defaults as specified at
+      //http://activemq.apache.org/failover-transport-reference.html
+      rebalance = ConfigurationHelper.getBooleanProperty("rebalance-cluster-clients", true, acceptorUsed.getConfiguration());
+      updateClusterClients = ConfigurationHelper.getBooleanProperty("update-cluster-clients", true, acceptorUsed.getConfiguration());
+      updateClusterClientsOnRemove = ConfigurationHelper.getBooleanProperty("update-cluster-clients-on-remove", true, acceptorUsed.getConfiguration());
    }
 
    @Override
@@ -186,6 +200,9 @@ public class OpenWireConnection implements RemotingConnection, CommandVisitor, S
       return info.getPassword();
    }
 
+   public boolean isRebalance() {
+      return rebalance;
+   }
 
    private ConnectionInfo getConnectionInfo() {
       if (state == null) {
@@ -209,6 +226,7 @@ public class OpenWireConnection implements RemotingConnection, CommandVisitor, S
 
          Command command = (Command) wireFormat.unmarshal(buffer);
 
+         //logger.log("got command: " + command);
          boolean responseRequired = command.isResponseRequired();
          int commandId = command.getCommandId();
          // the connection handles pings, negotiations directly.
@@ -224,10 +242,7 @@ public class OpenWireConnection implements RemotingConnection, CommandVisitor, S
             // amq here starts a read/write monitor thread (detect ttl?)
             negotiate((WireFormatInfo) command);
          }
-         else if (command.getClass() == ConnectionInfo.class || command.getClass() == ConsumerInfo.class || command.getClass() == RemoveInfo.class ||
-                  command.getClass() == SessionInfo.class || command.getClass() == ProducerInfo.class || ActiveMQMessage.class.isAssignableFrom(command.getClass()) ||
-                  command.getClass() == MessageAck.class || command.getClass() == TransactionInfo.class || command.getClass() == DestinationInfo.class ||
-                  command.getClass() == ShutdownInfo.class || command.getClass() == RemoveSubscriptionInfo.class) {
+         else {
             Response response = null;
 
             if (pendingStop) {
@@ -235,12 +250,16 @@ public class OpenWireConnection implements RemotingConnection, CommandVisitor, S
             }
             else {
                try {
+                  setLastCommand(command);
                   response = command.visit(this);
                }
                catch (Exception e) {
                   if (responseRequired) {
                      response = new ExceptionResponse(e);
                   }
+               }
+               finally {
+                  setLastCommand(null);
                }
 
                if (response instanceof ExceptionResponse) {
@@ -255,6 +274,7 @@ public class OpenWireConnection implements RemotingConnection, CommandVisitor, S
             if (responseRequired) {
                if (response == null) {
                   response = new Response();
+                  response.setCorrelationId(command.getCommandId());
                }
             }
 
@@ -273,17 +293,18 @@ public class OpenWireConnection implements RemotingConnection, CommandVisitor, S
             }
 
          }
-         else {
-            // note!!! wait for negotiation (e.g. use a countdown latch)
-            // before handling any other commands
-            this.protocolManager.handleCommand(this, command);
-         }
       }
       catch (IOException e) {
          ActiveMQServerLogger.LOGGER.error("error decoding", e);
       }
       catch (Throwable t) {
          ActiveMQServerLogger.LOGGER.error("error decoding", t);
+      }
+   }
+
+   private void setLastCommand(Command command) {
+      if (context != null) {
+         context.setLastCommand(command);
       }
    }
 
@@ -390,36 +411,12 @@ public class OpenWireConnection implements RemotingConnection, CommandVisitor, S
 
    @Override
    public void fail(ActiveMQException me) {
-      if (me != null) {
-         ActiveMQServerLogger.LOGGER.connectionFailureDetected(me.getMessage(), me.getType());
-      }
-
-      // Then call the listeners
-      callFailureListeners(me);
-
-      callClosingListeners();
-
-      destroyed = true;
-
-      transportConnection.close();
+      fail(me, null);
    }
 
    @Override
    public void destroy() {
-      destroyed = true;
-
-      transportConnection.close();
-
-      try {
-         deleteTempQueues();
-      }
-      catch (Exception e) {
-         //log warning
-      }
-
-      synchronized (sendLock) {
-         callClosingListeners();
-      }
+      fail(null, null);
    }
 
    private void deleteTempQueues() throws Exception {
@@ -452,7 +449,7 @@ public class OpenWireConnection implements RemotingConnection, CommandVisitor, S
 
    @Override
    public void disconnect(boolean criticalError) {
-      fail(null);
+      this.disconnect(null, null, criticalError);
    }
 
    @Override
@@ -529,39 +526,9 @@ public class OpenWireConnection implements RemotingConnection, CommandVisitor, S
 
    @Override
    public Response processAddConnection(ConnectionInfo info) throws Exception {
-      WireFormatInfo wireFormatInfo = wireFormat.getPreferedWireFormatInfo();
-      // Older clients should have been defaulting this field to true.. but
-      // they were not.
-      if (wireFormatInfo != null && wireFormatInfo.getVersion() <= 2) {
-         info.setClientMaster(true);
-      }
-
-      state = new ConnectionState(info);
-
-      context = new AMQConnectionContext();
-
-      state.reset(info);
-
-      // Setup the context.
-      String clientId = info.getClientId();
-      context.setBroker(protocolManager);
-      context.setClientId(clientId);
-      context.setClientMaster(info.isClientMaster());
-      context.setConnection(this);
-      context.setConnectionId(info.getConnectionId());
-      // for now we pass the manager as the connector and see what happens
-      // it should be related to activemq's Acceptor
-      context.setFaultTolerant(info.isFaultTolerant());
-      context.setUserName(info.getUserName());
-      context.setWireFormatInfo(wireFormatInfo);
-      context.setReconnect(info.isFailoverReconnect());
-      context.setConnectionState(state);
-      if (info.getClientIp() == null) {
-         info.setClientIp(getRemoteAddress());
-      }
-
+      //let protoclmanager handle connection add/remove
       try {
-         protocolManager.addConnection(context, info);
+         protocolManager.addConnection(this, info);
       }
       catch (Exception e) {
          if (e instanceof SecurityException) {
@@ -572,9 +539,9 @@ public class OpenWireConnection implements RemotingConnection, CommandVisitor, S
          Response resp = new ExceptionResponse(e);
          return resp;
       }
-      if (info.isManageable()) {
+      if (info.isManageable() && this.isUpdateClusterClients()) {
          // send ConnectionCommand
-         ConnectionControl command = new ConnectionControl();
+         ConnectionControl command = protocolManager.newConnectionControl(rebalance);
          command.setFaultTolerant(protocolManager.isFaultTolerantConfiguration());
          if (info.isFailoverReconnect()) {
             command.setRebalanceConnection(false);
@@ -582,6 +549,7 @@ public class OpenWireConnection implements RemotingConnection, CommandVisitor, S
          dispatchAsync(command);
       }
       return null;
+
    }
 
    public void dispatchAsync(Command message) {
@@ -768,6 +736,7 @@ public class OpenWireConnection implements RemotingConnection, CommandVisitor, S
          protocolManager.addConsumer(this, info);
       }
       catch (Exception e) {
+         e.printStackTrace();
          if (e instanceof ActiveMQSecurityException) {
             resp = new ExceptionResponse(new JMSSecurityException(e.getMessage()));
          }
@@ -917,8 +886,11 @@ public class OpenWireConnection implements RemotingConnection, CommandVisitor, S
    }
 
    @Override
-   public Response processConnectionControl(ConnectionControl arg0) throws Exception {
-      throw new IllegalStateException("not implemented! ");
+   public Response processConnectionControl(ConnectionControl connectionControl) throws Exception {
+      //activemq5 keeps a var to remember only the faultTolerant flag
+      //this can be sent over a reconnected transport as the first command
+      //before restoring the connection.
+      return null;
    }
 
    @Override
@@ -927,8 +899,16 @@ public class OpenWireConnection implements RemotingConnection, CommandVisitor, S
    }
 
    @Override
-   public Response processConsumerControl(ConsumerControl arg0) throws Exception {
-      throw new IllegalStateException("not implemented! ");
+   public Response processConsumerControl(ConsumerControl consumerControl) throws Exception {
+      //amq5 clients send this command to restore prefetchSize
+      //after successful reconnect
+      try {
+         protocolManager.updateConsumer(this, consumerControl);
+      }
+      catch (Exception e) {
+         //log error
+      }
+      return null;
    }
 
    @Override
@@ -1089,21 +1069,9 @@ public class OpenWireConnection implements RemotingConnection, CommandVisitor, S
 
    @Override
    public Response processRemoveConnection(ConnectionId id, long lastDeliveredSequenceId) throws Exception {
-      // Don't allow things to be added to the connection state while we
-      // are shutting down.
-      state.shutdown();
-      // Cascade the connection stop to the sessions.
-      for (SessionId sessionId : state.getSessionIds()) {
-         try {
-            processRemoveSession(sessionId, lastDeliveredSequenceId);
-         }
-         catch (Throwable e) {
-            // LOG
-         }
-      }
-
+      //we let protocol manager to handle connection add/remove
       try {
-         protocolManager.removeConnection(context, state.getInfo(), null);
+         protocolManager.removeConnection(this, state.getInfo(), null);
       }
       catch (Throwable e) {
          // log
@@ -1162,15 +1130,9 @@ public class OpenWireConnection implements RemotingConnection, CommandVisitor, S
       // Don't let new consumers or producers get added while we are closing
       // this down.
       session.shutdown();
-      // Cascade the connection stop to the consumers and producers.
-      for (ConsumerId consumerId : session.getConsumerIds()) {
-         try {
-            processRemoveConsumer(consumerId, lastDeliveredSequenceId);
-         }
-         catch (Throwable e) {
-            // LOG.warn("Failed to remove consumer: {}", consumerId, e);
-         }
-      }
+      // Cascade the connection stop producers.
+      // we don't stop consumer because in core
+      // closing the session will do the job
       for (ProducerId producerId : session.getProducerIds()) {
          try {
             processRemoveProducer(producerId);
@@ -1200,6 +1162,7 @@ public class OpenWireConnection implements RemotingConnection, CommandVisitor, S
 
    @Override
    public Response processShutdown(ShutdownInfo info) throws Exception {
+      this.shutdown(false);
       return null;
    }
 
@@ -1234,14 +1197,63 @@ public class OpenWireConnection implements RemotingConnection, CommandVisitor, S
       tempQueues.add(queue);
    }
 
-   @Override
-   public void disconnect(String reason, boolean fail) {
-      destroy();
+   private void shutdown(boolean fail) {
+      if (fail) {
+         transportConnection.forceClose();
+      }
+      else {
+         transportConnection.close();
+      }
+   }
+
+   private void disconnect(ActiveMQException me, String reason, boolean fail) {
+
+      if (context == null || destroyed) {
+         return;
+      }
+      // Don't allow things to be added to the connection state while we
+      // are shutting down.
+      // is it necessary? even, do we need state at all?
+      state.shutdown();
+
+      // Then call the listeners
+      // this should closes underlying sessions
+      callFailureListeners(me);
+
+      // this should clean up temp dests
+      synchronized (sendLock) {
+         callClosingListeners();
+      }
+
+      destroyed = true;
+
+      //before closing transport, send the last response if any
+      Command command = context.getLastCommand();
+      if (command != null && command.isResponseRequired()) {
+         Response lastResponse = new Response();
+         lastResponse.setCorrelationId(command.getCommandId());
+         dispatchSync(lastResponse);
+         context.setDontSendReponse(true);
+      }
    }
 
    @Override
-   public void fail(ActiveMQException e, String message) {
-      destroy();
+   public void disconnect(String reason, boolean fail) {
+      this.disconnect(null, reason, fail);
+   }
+
+   @Override
+   public void fail(ActiveMQException me, String message) {
+      if (me != null) {
+         ActiveMQServerLogger.LOGGER.connectionFailureDetected(me.getMessage(), me.getType());
+      }
+      try {
+         protocolManager.removeConnection(this, this.getConnectionInfo(), me);
+      }
+      catch (InvalidClientIDException e) {
+         ActiveMQServerLogger.LOGGER.warn("Couldn't close connection because invalid clientID", e);
+      }
+      shutdown(true);
    }
 
    public void setAdvisorySession(AMQSession amqSession) {
@@ -1252,8 +1264,82 @@ public class OpenWireConnection implements RemotingConnection, CommandVisitor, S
       return this.advisorySession;
    }
 
-   public AMQConnectionContext getConext() {
+   public AMQConnectionContext getContext() {
       return this.context;
    }
 
+   public String getDefaultSocketURIString() {
+      return defaultSocketURIString;
+   }
+
+   public void updateClient(ConnectionControl control) {
+      //      if (!destroyed && context.isFaultTolerant()) {
+      if (updateClusterClients) {
+         dispatchAsync(control);
+      }
+      //      }
+   }
+
+   public boolean isUpdateClusterClients() {
+      return updateClusterClients;
+   }
+
+   public AMQConnectionContext initContext(ConnectionInfo info) {
+      WireFormatInfo wireFormatInfo = wireFormat.getPreferedWireFormatInfo();
+      // Older clients should have been defaulting this field to true.. but
+      // they were not.
+      if (wireFormatInfo != null && wireFormatInfo.getVersion() <= 2) {
+         info.setClientMaster(true);
+      }
+
+      state = new ConnectionState(info);
+
+      context = new AMQConnectionContext();
+
+      state.reset(info);
+
+      // Setup the context.
+      String clientId = info.getClientId();
+      context.setBroker(protocolManager);
+      context.setClientId(clientId);
+      context.setClientMaster(info.isClientMaster());
+      context.setConnection(this);
+      context.setConnectionId(info.getConnectionId());
+      // for now we pass the manager as the connector and see what happens
+      // it should be related to activemq's Acceptor
+      context.setFaultTolerant(info.isFaultTolerant());
+      context.setUserName(info.getUserName());
+      context.setWireFormatInfo(wireFormatInfo);
+      context.setReconnect(info.isFailoverReconnect());
+      context.setConnectionState(state);
+      if (info.getClientIp() == null) {
+         info.setClientIp(getRemoteAddress());
+      }
+
+      return context;
+   }
+
+   //raise the refCount of context
+   public void reconnect(AMQConnectionContext existingContext, ConnectionInfo info) {
+      this.context = existingContext;
+      WireFormatInfo wireFormatInfo = wireFormat.getPreferedWireFormatInfo();
+      // Older clients should have been defaulting this field to true.. but
+      // they were not.
+      if (wireFormatInfo != null && wireFormatInfo.getVersion() <= 2) {
+         info.setClientMaster(true);
+      }
+      if (info.getClientIp() == null) {
+         info.setClientIp(getRemoteAddress());
+      }
+
+      state = new ConnectionState(info);
+      state.reset(info);
+
+      context.setConnection(this);
+      context.setConnectionState(state);
+      context.setClientMaster(info.isClientMaster());
+      context.setFaultTolerant(info.isFaultTolerant());
+      context.setReconnect(true);
+      context.incRefCount();
+   }
 }

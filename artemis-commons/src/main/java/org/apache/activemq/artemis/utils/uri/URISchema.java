@@ -192,7 +192,8 @@ public abstract class URISchema<T, P> {
    public static void setData(URI uri,
                               HashMap<String, Object> properties,
                               Set<String> allowableProperties,
-                              Map<String, String> query) {
+                              Map<String, String> query,
+                              Map<String, Object> extraProps) {
       if (allowableProperties.contains("host")) {
          properties.put("host", "" + uri.getHost());
       }
@@ -205,6 +206,9 @@ public abstract class URISchema<T, P> {
       for (Map.Entry<String, String> entry : query.entrySet()) {
          if (allowableProperties.contains(entry.getKey())) {
             properties.put(entry.getKey(), entry.getValue());
+         }
+         else {
+            extraProps.put(entry.getKey(), entry.getValue());
          }
       }
    }

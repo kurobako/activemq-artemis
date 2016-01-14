@@ -23,7 +23,6 @@ import junit.framework.Test;
 
 import org.apache.activemq.ActiveMQConnectionFactory;
 import org.apache.activemq.EmbeddedBrokerTestSupport;
-import org.apache.activemq.broker.BrokerService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -181,15 +180,6 @@ public class TransportUriTest extends EmbeddedBrokerTestSupport {
          }
       }
       super.tearDown();
-   }
-
-   @Override
-   protected BrokerService createBroker() throws Exception {
-      BrokerService answer = new BrokerService();
-      answer.setUseJmx(false);
-      answer.setPersistent(isPersistent());
-      answer.addConnector(bindAddress);
-      return answer;
    }
 
    public static Test suite() {

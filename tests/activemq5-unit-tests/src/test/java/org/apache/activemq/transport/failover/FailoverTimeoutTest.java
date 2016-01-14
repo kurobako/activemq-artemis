@@ -30,40 +30,43 @@ import javax.jms.TextMessage;
 
 import org.apache.activemq.ActiveMQConnection;
 import org.apache.activemq.ActiveMQConnectionFactory;
+import org.apache.activemq.artemis.core.config.Configuration;
+import org.apache.activemq.artemis.jms.server.config.impl.JMSConfigurationImpl;
+import org.apache.activemq.artemis.jms.server.embedded.EmbeddedJMS;
 import org.apache.activemq.broker.BrokerService;
+import org.apache.activemq.broker.artemiswrapper.OpenwireArtemisBaseTest;
 import org.junit.After;
 import org.junit.Before;
 import org.junit.Test;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-public class FailoverTimeoutTest {
+public class FailoverTimeoutTest extends OpenwireArtemisBaseTest {
 
    private static final Logger LOG = LoggerFactory.getLogger(FailoverTimeoutTest.class);
 
    private static final String QUEUE_NAME = "test.failovertimeout";
-   BrokerService bs;
+   EmbeddedJMS server;
    URI tcpUri;
 
    @Before
    public void setUp() throws Exception {
-      bs = new BrokerService();
-      bs.setUseJmx(false);
-      bs.addConnector("tcp://localhost:0");
-      bs.start();
-      tcpUri = bs.getTransportConnectors().get(0).getConnectUri();
+      Configuration config = createConfig(0);
+      server = new EmbeddedJMS().setConfiguration(config).setJmsConfiguration(new JMSConfigurationImpl());
+      server.start();
+      tcpUri = new URI(newURI(0));
    }
 
    @After
    public void tearDown() throws Exception {
-      if (bs != null) {
-         bs.stop();
+      if (server != null) {
+         server.stop();
       }
    }
 
    @Test
    public void testTimoutDoesNotFailConnectionAttempts() throws Exception {
-      bs.stop();
+      server.stop();
       long timeout = 1000;
 
       long startTime = System.currentTimeMillis();
@@ -99,7 +102,7 @@ public class FailoverTimeoutTest {
       TextMessage message = session.createTextMessage("Test message");
       producer.send(message);
 
-      bs.stop();
+      server.stop();
 
       try {
          producer.send(message);
@@ -108,15 +111,14 @@ public class FailoverTimeoutTest {
          assertEquals("Failover timeout of " + timeout + " ms reached.", jmse.getMessage());
       }
 
-      bs = new BrokerService();
-      bs.setUseJmx(false);
-      bs.addConnector(tcpUri);
-      bs.start();
-      bs.waitUntilStarted();
+      Configuration config = createConfig(0);
+      server = new EmbeddedJMS().setConfiguration(config).setJmsConfiguration(new JMSConfigurationImpl());
+      server.start();
 
       producer.send(message);
 
-      bs.stop();
+      server.stop();
+      server = null;
    }
 
    @Test

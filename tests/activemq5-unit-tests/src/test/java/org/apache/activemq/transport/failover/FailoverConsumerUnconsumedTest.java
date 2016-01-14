@@ -22,6 +22,8 @@ import java.util.Vector;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import javax.jms.Destination;
 import javax.jms.JMSException;
@@ -37,97 +39,105 @@ import org.apache.activemq.ActiveMQConnectionFactory;
 import org.apache.activemq.ActiveMQMessageConsumer;
 import org.apache.activemq.ActiveMQMessageTransformation;
 import org.apache.activemq.ActiveMQSession;
-import org.apache.activemq.broker.BrokerPlugin;
-import org.apache.activemq.broker.BrokerPluginSupport;
-import org.apache.activemq.broker.BrokerService;
-import org.apache.activemq.broker.ConnectionContext;
-import org.apache.activemq.broker.region.Subscription;
+import org.apache.activemq.artemis.api.core.SimpleString;
+import org.apache.activemq.artemis.core.protocol.openwire.amq.AMQConnectionContext;
+import org.apache.activemq.artemis.core.server.impl.QueueImpl;
+import org.apache.activemq.artemis.jms.server.embedded.EmbeddedJMS;
+import org.apache.activemq.broker.artemiswrapper.OpenwireArtemisBaseTest;
 import org.apache.activemq.command.ConsumerId;
-import org.apache.activemq.command.ConsumerInfo;
 import org.apache.activemq.command.SessionId;
 import org.apache.activemq.util.Wait;
+import org.jboss.byteman.contrib.bmunit.BMRule;
+import org.jboss.byteman.contrib.bmunit.BMRules;
+import org.jboss.byteman.contrib.bmunit.BMUnitRunner;
+import org.junit.Assert;
+import org.junit.Before;
+import org.junit.runner.RunWith;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.junit.After;
 import org.junit.Test;
 
 // see https://issues.apache.org/activemq/browse/AMQ-2573
-public class FailoverConsumerUnconsumedTest {
-
+@RunWith(BMUnitRunner.class)
+public class FailoverConsumerUnconsumedTest extends OpenwireArtemisBaseTest {
    private static final Logger LOG = LoggerFactory.getLogger(FailoverConsumerUnconsumedTest.class);
    private static final String QUEUE_NAME = "FailoverWithUnconsumed";
-   private static final String TRANSPORT_URI = "tcp://localhost:0";
-   private String url;
+   private static final AtomicBoolean doByteman = new AtomicBoolean(false);
+
+   private static int maxConsumers = 2;
+   private static AtomicInteger consumerCount = new AtomicInteger(0);
+   private static CountDownLatch brokerStopLatch = new CountDownLatch(1);
+   private static AtomicBoolean watchTopicAdvisories = new AtomicBoolean(false);
+
+   private String url = newURI(0);
    final int prefetch = 10;
-   BrokerService broker;
+   private static EmbeddedJMS broker;
 
    @After
-   public void stopBroker() throws Exception {
+   public void tearDown() throws Exception {
       if (broker != null) {
          broker.stop();
+         broker = null;
       }
    }
 
-   public void startBroker(boolean deleteAllMessagesOnStartup) throws Exception {
-      broker = createBroker(deleteAllMessagesOnStartup);
-      broker.start();
-   }
-
-   public BrokerService createBroker(boolean deleteAllMessagesOnStartup) throws Exception {
-      return createBroker(deleteAllMessagesOnStartup, TRANSPORT_URI);
-   }
-
-   public BrokerService createBroker(boolean deleteAllMessagesOnStartup, String bindAddress) throws Exception {
-      broker = new BrokerService();
-      broker.addConnector(bindAddress);
-      broker.setDeleteAllMessagesOnStartup(deleteAllMessagesOnStartup);
-
-      this.url = broker.getTransportConnectors().get(0).getConnectUri().toString();
-
-      return broker;
+   @Before
+   public void setUp() throws Exception {
+      consumerCount.set(0);
    }
 
    @Test
+   @BMRules(
+           rules = {
+                   @BMRule(
+                           name = "set no return response and stop the broker",
+                           targetClass = "org.apache.activemq.artemis.core.protocol.openwire.OpenWireConnection",
+                           targetMethod = "processAddConsumer",
+                           targetLocation = "ENTRY",
+                           binding = "owconn:OpenWireConnection = $0; context = owconn.getContext()",
+                           action = "org.apache.activemq.transport.failover.FailoverConsumerUnconsumedTest.holdResponseAndStopBroker2(context)")
+           }
+   )
    public void testFailoverConsumerDups() throws Exception {
+      watchTopicAdvisories.set(true);
       doTestFailoverConsumerDups(true);
    }
 
    @Test
+   @BMRules(
+           rules = {
+                   @BMRule(
+                           name = "set no return response and stop the broker",
+                           targetClass = "org.apache.activemq.artemis.core.protocol.openwire.OpenWireConnection",
+                           targetMethod = "processAddConsumer",
+                           targetLocation = "ENTRY",
+                           binding = "owconn:OpenWireConnection = $0; context = owconn.getContext()",
+                           action = "org.apache.activemq.transport.failover.FailoverConsumerUnconsumedTest.holdResponseAndStopBroker2(context)")
+           }
+   )
    public void testFailoverConsumerDupsNoAdvisoryWatch() throws Exception {
+      watchTopicAdvisories.set(false);
       doTestFailoverConsumerDups(false);
    }
 
    @SuppressWarnings("unchecked")
    @Test
+   @BMRules(
+           rules = {
+                   @BMRule(
+                           name = "set no return response and stop the broker",
+                           targetClass = "org.apache.activemq.artemis.core.protocol.openwire.OpenWireConnection",
+                           targetMethod = "processAddConsumer",
+                           targetLocation = "ENTRY",
+                           binding = "owconn:OpenWireConnection = $0; context = owconn.getContext()",
+                           action = "org.apache.activemq.transport.failover.FailoverConsumerUnconsumedTest.holdResponseAndStopBroker(context)")
+           }
+   )
    public void testFailoverClientAckMissingRedelivery() throws Exception {
-
-      final int maxConsumers = 2;
-      broker = createBroker(true);
-
-      broker.setPlugins(new BrokerPlugin[]{new BrokerPluginSupport() {
-         int consumerCount;
-
-         // broker is killed on x create consumer
-         @Override
-         public Subscription addConsumer(ConnectionContext context, final ConsumerInfo info) throws Exception {
-            if (++consumerCount == maxConsumers) {
-               context.setDontSendReponse(true);
-               Executors.newSingleThreadExecutor().execute(new Runnable() {
-                  @Override
-                  public void run() {
-                     LOG.info("Stopping broker on consumer: " + info.getConsumerId());
-                     try {
-                        broker.stop();
-                     }
-                     catch (Exception e) {
-                        e.printStackTrace();
-                     }
-                  }
-               });
-            }
-            return super.addConsumer(context, info);
-         }
-      }});
+      maxConsumers = 2;
+      brokerStopLatch = new CountDownLatch(1);
+      broker = createBroker();
       broker.start();
 
       ActiveMQConnectionFactory cf = new ActiveMQConnectionFactory("failover:(" + url + ")");
@@ -139,7 +149,9 @@ public class FailoverConsumerUnconsumedTest {
       final Session consumerSession = connection.createSession(false, Session.CLIENT_ACKNOWLEDGE);
       final Queue destination = consumerSession.createQueue(QUEUE_NAME + "?jms.consumer.prefetch=" + prefetch);
 
-      final Vector<TestConsumer> testConsumers = new Vector<>();
+      doByteman.set(true);
+
+      final Vector<TestConsumer> testConsumers = new Vector<TestConsumer>();
       TestConsumer testConsumer = new TestConsumer(consumerSession, destination, connection);
       testConsumer.setMessageListener(new MessageListener() {
          @Override
@@ -157,7 +169,6 @@ public class FailoverConsumerUnconsumedTest {
       produceMessage(consumerSession, destination, maxConsumers * prefetch);
 
       assertTrue("add messages are delivered", Wait.waitFor(new Wait.Condition() {
-         @Override
          public boolean isSatisified() throws Exception {
             int totalDelivered = 0;
             for (TestConsumer testConsumer : testConsumers) {
@@ -172,7 +183,6 @@ public class FailoverConsumerUnconsumedTest {
       final CountDownLatch shutdownConsumerAdded = new CountDownLatch(1);
 
       Executors.newSingleThreadExecutor().execute(new Runnable() {
-         @Override
          public void run() {
             try {
                LOG.info("add last consumer...");
@@ -198,17 +208,16 @@ public class FailoverConsumerUnconsumedTest {
          }
       });
 
-      // will be stopped by the plugin
-      broker.waitUntilStopped();
+      brokerStopLatch.await();
+      doByteman.set(false);
 
-      broker = createBroker(false, this.url);
+      broker = createBroker();
       broker.start();
 
       assertTrue("consumer added through failover", shutdownConsumerAdded.await(30, TimeUnit.SECONDS));
 
       // each should again get prefetch messages - all unacked deliveries should be rolledback
       assertTrue("after restart all messages are re dispatched", Wait.waitFor(new Wait.Condition() {
-         @Override
          public boolean isSatisified() throws Exception {
             int totalDelivered = 0;
             for (TestConsumer testConsumer : testConsumers) {
@@ -220,54 +229,18 @@ public class FailoverConsumerUnconsumedTest {
          }
       }));
 
-      assertTrue("after restart each got prefetch amount", Wait.waitFor(new Wait.Condition() {
-         @Override
-         public boolean isSatisified() throws Exception {
-            for (TestConsumer testConsumer : testConsumers) {
-               long delivered = testConsumer.deliveredSize();
-               LOG.info(testConsumer.getConsumerId() + " delivered: " + delivered);
-               if (delivered != prefetch) {
-                  return false;
-               }
-            }
-            return true;
-         }
-      }));
-
       connection.close();
    }
 
    @SuppressWarnings("unchecked")
    public void doTestFailoverConsumerDups(final boolean watchTopicAdvisories) throws Exception {
 
-      final int maxConsumers = 4;
-      broker = createBroker(true);
-
-      broker.setPlugins(new BrokerPlugin[]{new BrokerPluginSupport() {
-         int consumerCount;
-
-         // broker is killed on x create consumer
-         @Override
-         public Subscription addConsumer(ConnectionContext context, final ConsumerInfo info) throws Exception {
-            if (++consumerCount == maxConsumers + (watchTopicAdvisories ? 1 : 0)) {
-               context.setDontSendReponse(true);
-               Executors.newSingleThreadExecutor().execute(new Runnable() {
-                  @Override
-                  public void run() {
-                     LOG.info("Stopping broker on consumer: " + info.getConsumerId());
-                     try {
-                        broker.stop();
-                     }
-                     catch (Exception e) {
-                        e.printStackTrace();
-                     }
-                  }
-               });
-            }
-            return super.addConsumer(context, info);
-         }
-      }});
+      maxConsumers = 4;
+      broker = createBroker();
       broker.start();
+
+      brokerStopLatch = new CountDownLatch(1);
+      doByteman.set(true);
 
       ActiveMQConnectionFactory cf = new ActiveMQConnectionFactory("failover:(" + url + ")");
       cf.setWatchTopicAdvisories(watchTopicAdvisories);
@@ -283,10 +256,11 @@ public class FailoverConsumerUnconsumedTest {
          testConsumers.add(new TestConsumer(consumerSession, destination, connection));
       }
 
+      assureQueueMessages(0, new SimpleString("jms.queue." + QUEUE_NAME));
+
       produceMessage(consumerSession, destination, maxConsumers * prefetch);
 
       assertTrue("add messages are dispatched", Wait.waitFor(new Wait.Condition() {
-         @Override
          public boolean isSatisified() throws Exception {
             int totalUnconsumed = 0;
             for (TestConsumer testConsumer : testConsumers) {
@@ -301,7 +275,6 @@ public class FailoverConsumerUnconsumedTest {
       final CountDownLatch shutdownConsumerAdded = new CountDownLatch(1);
 
       Executors.newSingleThreadExecutor().execute(new Runnable() {
-         @Override
          public void run() {
             try {
                LOG.info("add last consumer...");
@@ -315,12 +288,8 @@ public class FailoverConsumerUnconsumedTest {
          }
       });
 
-      // will be stopped by the plugin
-      broker.waitUntilStopped();
-
       // verify interrupt
       assertTrue("add messages dispatched and unconsumed are cleaned up", Wait.waitFor(new Wait.Condition() {
-         @Override
          public boolean isSatisified() throws Exception {
             int totalUnconsumed = 0;
             for (TestConsumer testConsumer : testConsumers) {
@@ -332,14 +301,16 @@ public class FailoverConsumerUnconsumedTest {
          }
       }));
 
-      broker = createBroker(false, this.url);
+      brokerStopLatch.await();
+      doByteman.set(false);
+
+      broker = createBroker();
       broker.start();
 
       assertTrue("consumer added through failover", shutdownConsumerAdded.await(30, TimeUnit.SECONDS));
 
       // each should again get prefetch messages - all unconsumed deliveries should be rolledback
       assertTrue("after start all messages are re dispatched", Wait.waitFor(new Wait.Condition() {
-         @Override
          public boolean isSatisified() throws Exception {
             int totalUnconsumed = 0;
             for (TestConsumer testConsumer : testConsumers) {
@@ -352,6 +323,11 @@ public class FailoverConsumerUnconsumedTest {
       }));
 
       connection.close();
+   }
+
+   private void assureQueueMessages(int num, SimpleString queueName) {
+      QueueImpl queue = (QueueImpl) broker.getActiveMQServer().getPostOffice().getBinding(queueName).getBindable();
+      Assert.assertEquals(num, queue.getMessageCount());
    }
 
    private void produceMessage(final Session producerSession, Queue destination, long count) throws JMSException {
@@ -385,4 +361,44 @@ public class FailoverConsumerUnconsumedTest {
       idGen -= 5;
       return idGen;
    }
+
+   public static void holdResponseAndStopBroker(AMQConnectionContext context) {
+      if (doByteman.get()) {
+         if (consumerCount.incrementAndGet() == maxConsumers) {
+            context.setDontSendReponse(true);
+            Executors.newSingleThreadExecutor().execute(new Runnable() {
+               public void run() {
+                  try {
+                     broker.stop();
+                     brokerStopLatch.countDown();
+                  }
+                  catch (Exception e) {
+                     e.printStackTrace();
+                  }
+               }
+            });
+         }
+      }
+   }
+
+   public static void holdResponseAndStopBroker2(AMQConnectionContext context) {
+      if (doByteman.get()) {
+         if (consumerCount.incrementAndGet() == maxConsumers + (watchTopicAdvisories.get() ? 1 : 0)) {
+            context.setDontSendReponse(true);
+            Executors.newSingleThreadExecutor().execute(new Runnable() {
+               public void run() {
+                  try {
+                     broker.stop();
+                     Assert.assertEquals(1, brokerStopLatch.getCount());
+                     brokerStopLatch.countDown();
+                  }
+                  catch (Exception e) {
+                     e.printStackTrace();
+                  }
+               }
+            });
+         }
+      }
+   }
+
 }

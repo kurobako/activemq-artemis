@@ -33,6 +33,7 @@ import org.apache.activemq.artemis.api.core.SimpleString;
 import org.apache.activemq.artemis.spi.core.remoting.ReadyListener;
 import org.apache.activemq.command.ActiveMQDestination;
 import org.apache.activemq.command.ConnectionInfo;
+import org.apache.activemq.command.ConsumerId;
 import org.apache.activemq.command.ConsumerInfo;
 import org.apache.activemq.command.ExceptionResponse;
 import org.apache.activemq.command.Message;
@@ -62,7 +63,6 @@ import org.apache.activemq.artemis.spi.core.protocol.SessionCallback;
 import org.apache.activemq.wireformat.WireFormat;
 
 public class AMQSession implements SessionCallback {
-
    private AMQServerSession coreSession;
    private ConnectionInfo connInfo;
    private SessionInfo sessInfo;
@@ -137,6 +137,7 @@ public class AMQSession implements SessionCallback {
             getCoreServer().getJMSQueueCreator().create(queueName);
          }
          AMQConsumer consumer = new AMQConsumer(this, d, info, scheduledPool);
+
          consumer.init();
          consumerMap.put(d, consumer);
          consumers.put(consumer.getNativeId(), consumer);
@@ -193,8 +194,15 @@ public class AMQSession implements SessionCallback {
 
    @Override
    public boolean hasCredits(ServerConsumer consumerID) {
-      AMQConsumer amqConsumer = consumers.get(consumerID.getID());
-      return amqConsumer.hasCredits();
+
+      AMQConsumer amqConsumer;
+
+      amqConsumer = consumers.get(consumerID.getID());
+
+      if (amqConsumer != null) {
+         return amqConsumer.hasCredits();
+      }
+      return false;
    }
 
    @Override
@@ -443,6 +451,16 @@ public class AMQSession implements SessionCallback {
 
    public AMQConsumer getConsumer(Long coreConsumerId) {
       return consumers.get(coreConsumerId);
+   }
+
+   public void updateConsumerPrefetchSize(ConsumerId consumerId, int prefetch) {
+      Iterator<AMQConsumer> iterator = consumers.values().iterator();
+      while (iterator.hasNext()) {
+         AMQConsumer consumer = iterator.next();
+         if (consumer.getId().equals(consumerId)) {
+            consumer.setPrefetchSize(prefetch);
+         }
+      }
    }
 
    private class SendRetryTask implements Runnable {
