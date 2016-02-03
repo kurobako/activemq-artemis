@@ -165,6 +165,7 @@ public class TransportUriTest extends EmbeddedBrokerTestSupport {
 
    @Override
    protected void setUp() throws Exception {
+      disableWrapper = true;
       bindAddress = "tcp://localhost:61616";
       super.setUp();
    }

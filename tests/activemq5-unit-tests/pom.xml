@@ -416,11 +416,13 @@
             <configuration>
                <skipTests>${skipActiveMQ5Tests}</skipTests>
                <includes>
-                  <!-- include this first three packages -->
+                  <!-- included packages -->
                   <include>**/org/apache/activemq/*Test.java</include>
                   <include>**/org/apache/activemq/command/*Test.java</include>
                   <include>**/org/apache/activemq/openwire/*Test.java</include>
                   <include>**/org/apache/activemq/transport/tcp/*Test.java</include>
+                  <include>**/org/apache/activemq/transport/failover/*Test.java</include>
+                  <include>**/org/apache/activemq/transport/*Test.java</include>
                   <!-- tests that are known to pass-->
                   <include>**/org/apache/activemq/blob/BlobTransferPolicyUriTest.java</include>
                </includes>
@@ -430,7 +432,6 @@
                   <exclude>**/org/apache/activemq/ProducerFlowControlTest.java</exclude>
                   <!-- exclude tests that are on client side only -->
                   <exclude>**/org/apache/activemq/transport/tcp/TransportConnectorInvalidSocketOptionsTest.java</exclude>
-                  <exclude>**/org/apache/activemq/transport/tcp/TransportUriTest.java</exclude>
                </excludes>
             </configuration>
          </plugin>

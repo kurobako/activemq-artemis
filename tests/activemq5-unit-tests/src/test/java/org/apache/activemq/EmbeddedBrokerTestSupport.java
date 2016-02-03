@@ -46,13 +46,14 @@ public abstract class EmbeddedBrokerTestSupport extends CombinationTestSupport {
    protected boolean useTopic;
    protected ActiveMQDestination destination;
    protected JmsTemplate template;
+   protected boolean disableWrapper = false;
 
    public TemporaryFolder temporaryFolder;
 
    public String CLUSTER_PASSWORD = "OPENWIRECLUSTER";
 
    protected void setUp() throws Exception {
-      BrokerService.disableWrapper = true;
+      BrokerService.disableWrapper = disableWrapper;
       File tmpRoot = new File("./target/tmp");
       tmpRoot.mkdirs();
       temporaryFolder = new TemporaryFolder(tmpRoot);
@@ -78,6 +79,7 @@ public abstract class EmbeddedBrokerTestSupport extends CombinationTestSupport {
       if (artemisBroker != null) {
          try {
             artemisBroker.stop();
+            artemisBroker = null;
          }
          catch (Exception e) {
          }

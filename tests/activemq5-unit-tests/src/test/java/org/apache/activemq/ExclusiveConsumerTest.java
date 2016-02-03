@@ -26,6 +26,7 @@ import javax.jms.Session;
 
 import junit.framework.TestCase;
 
+import org.apache.activemq.artemiswrapper.ArtemisBrokerHelper;
 import org.apache.activemq.command.ActiveMQQueue;
 
 public class ExclusiveConsumerTest extends TestCase {

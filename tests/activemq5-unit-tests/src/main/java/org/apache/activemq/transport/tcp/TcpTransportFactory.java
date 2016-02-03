@@ -67,6 +67,10 @@ public class TcpTransportFactory extends TransportFactory {
             System.out.println("bound: " + brokerId);
          }
       }
+      //remove unused invm parameters
+      params.remove("broker.persistent");
+      params.remove("broker.useJmx");
+      params.remove("marshal");
       URI location2 = URISupport.createRemainingURI(location, params);
       return super.doConnect(location2);
    }
