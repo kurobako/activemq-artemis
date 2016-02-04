@@ -34,6 +34,16 @@ import org.apache.activemq.broker.view.ConnectionDotFilePlugin;
 
 public class TimeStampTest extends TestCase {
 
+   @Override
+   public void setUp() {
+      BrokerService.disableWrapper = true;
+   }
+
+   @Override
+   public void tearDown() {
+      BrokerService.disableWrapper = false;
+   }
+
    public void test() throws Exception {
       BrokerService broker = new BrokerService();
       broker.setPersistent(false);

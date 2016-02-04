@@ -57,6 +57,8 @@ public class TcpTransportFactory extends TransportFactory {
       Map<String, String> params = URISupport.parseParameters(location);
       String brokerId = params.remove("invmBrokerId");
       URI location1 = URISupport.createRemainingURI(location, Collections.EMPTY_MAP);
+
+      LOG.info("deciding whether starting an internal broker: " + brokerService + " flag: " + BrokerService.disableWrapper);
       if (brokerService == null && !BrokerService.disableWrapper) {
 
          ArtemisBrokerHelper.startArtemisBroker(location1);
@@ -179,7 +181,18 @@ public class TcpTransportFactory extends TransportFactory {
       return new InactivityMonitor(transport, format);
    }
 
+   //remember call this if the test is using the internal broker.
    public static void clearService() {
-      brokerService = null;
+      if (brokerService != null) {
+         try {
+            ArtemisBrokerHelper.stopArtemisBroker();
+         }
+         catch (Exception e) {
+            e.printStackTrace();
+         }
+         finally {
+            brokerService = null;
+         }
+      }
    }
 }
