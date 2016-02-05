@@ -41,13 +41,14 @@ public class TransactionContextTest {
 
    @Before
    public void setup() throws Exception {
-      connection = factory.createActiveMQConnection();
-      underTest = new TransactionContext(connection);
-   }
-
-   @AfterClass
-   public static void cleanup() throws Exception {
-      TcpTransportFactory.clearService();
+      try {
+         connection = factory.createActiveMQConnection();
+         underTest = new TransactionContext(connection);
+      }
+      catch (Exception e) {
+         e.printStackTrace();
+         throw e;
+      }
    }
 
    @After
@@ -55,6 +56,7 @@ public class TransactionContextTest {
       if (connection != null) {
          connection.close();
       }
+      TcpTransportFactory.clearService();
    }
 
    @Test
@@ -116,6 +118,7 @@ public class TransactionContextTest {
 
    @Test
    public void testSyncIndexCleared() throws Exception {
+      System.out.println("================================= test testSyncIndexCleared ===========");
       final AtomicInteger beforeEndCountA = new AtomicInteger(0);
       final AtomicInteger rollbackCountA = new AtomicInteger(0);
       Synchronization sync = new Synchronization() {

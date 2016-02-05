@@ -102,6 +102,7 @@ public class ReconnectWithSameClientIDTest extends EmbeddedBrokerTestSupport {
    @Override
    protected void setUp() throws Exception {
       bindAddress = "tcp://localhost:0";
+      disableWrapper = true;
       super.setUp();
    }
 

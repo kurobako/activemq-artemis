@@ -42,6 +42,7 @@ public class ArtemisBrokerHelper {
    // start a tcp transport artemis broker, the broker need to
    // be invm with client.
    public static void startArtemisBroker(URI location) throws IOException {
+      System.out.println("---starting broker, service is there? " + service);
       if (service != null) {
          return;
       }
@@ -49,6 +50,7 @@ public class ArtemisBrokerHelper {
          service = serviceClass.newInstance();
          Method startMethod = serviceClass.getMethod("start");
          startMethod.invoke(service, (Object[]) null);
+         System.out.println("started a service instance: " + service);
       }
       catch (InstantiationException e) {
          throw new IOException("Inst exception", e);
@@ -79,18 +81,23 @@ public class ArtemisBrokerHelper {
    //to prevent auto broker creation.
    public static void setBroker(Object startedBroker) {
       service = startedBroker;
+      System.out.println("somebody set a broker service: " + service);
    }
 
    public static BrokerService getBroker() {
       return (BrokerService) service;
    }
 
-   public static void stopArtemisBroker() throws Exception {
+   public static void stopArtemisBroker() {
       try {
          if (service != null) {
             Method startMethod = serviceClass.getMethod("stop");
             startMethod.invoke(service, (Object[]) null);
+            System.out.println("stopped the service instance: " + service);
          }
+      }
+      catch (Exception e) {
+         e.printStackTrace();
       }
       finally {
          service = null;

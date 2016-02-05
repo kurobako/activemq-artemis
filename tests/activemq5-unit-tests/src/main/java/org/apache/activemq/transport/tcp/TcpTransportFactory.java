@@ -61,18 +61,20 @@ public class TcpTransportFactory extends TransportFactory {
       LOG.info("deciding whether starting an internal broker: " + brokerService + " flag: " + BrokerService.disableWrapper);
       if (brokerService == null && !BrokerService.disableWrapper) {
 
+         LOG.info("starting internal broker: " + location1);
          ArtemisBrokerHelper.startArtemisBroker(location1);
          brokerService = location.toString();
 
          if (brokerId != null) {
             BrokerRegistry.getInstance().bind(brokerId, ArtemisBrokerHelper.getBroker());
-            System.out.println("bound: " + brokerId);
+            LOG.info("bound: " + brokerId);
          }
       }
       //remove unused invm parameters
       params.remove("broker.persistent");
       params.remove("broker.useJmx");
       params.remove("marshal");
+      params.remove("create");
       URI location2 = URISupport.createRemainingURI(location, params);
       return super.doConnect(location2);
    }

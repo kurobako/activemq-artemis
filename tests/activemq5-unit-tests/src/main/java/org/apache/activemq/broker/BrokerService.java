@@ -130,7 +130,7 @@ public class BrokerService implements Service {
 
    @Override
    public String toString() {
-      return "BrokerService[" + getBrokerName() + "]";
+      return "BrokerService[" + getBrokerName() + "]" + super.toString();
    }
 
    private String getBrokerVersion() {

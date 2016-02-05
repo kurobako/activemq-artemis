@@ -377,6 +377,7 @@ public class ZeroPrefetchConsumerTest extends EmbeddedBrokerTestSupport {
 
    @Override
    protected void setUp() throws Exception {
+      disableWrapper = true;
       bindAddress = "tcp://localhost:0";
       super.setUp();
 
@@ -388,11 +389,12 @@ public class ZeroPrefetchConsumerTest extends EmbeddedBrokerTestSupport {
    @Override
    protected void startBroker() throws Exception {
       super.startBroker();
-      bindAddress = broker.getTransportConnectors().get(0).getConnectUri().toString();
+      bindAddress = newURI("localhost", 0);
    }
 
    @Override
    protected void tearDown() throws Exception {
+      BrokerService.disableWrapper = false;
       connection.close();
       super.tearDown();
    }

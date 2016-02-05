@@ -27,6 +27,7 @@ import org.apache.activemq.artemis.jms.server.config.impl.JMSConfigurationImpl;
 import org.apache.activemq.artemis.jms.server.embedded.EmbeddedJMS;
 import org.apache.activemq.broker.artemiswrapper.OpenwireArtemisBaseTest;
 import org.junit.After;
+import org.junit.Assert;
 import org.junit.Test;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -75,6 +76,8 @@ public class ConnectionHangOnStartupTest extends OpenwireArtemisBaseTest {
 
    @Test(timeout = 60000)
    public void testInitialWireFormatNegotiationTimeout() throws Exception {
+      Assert.fail("this test pass but it'll leave a thread running all the time, fix it before adding the test to the testsuite!");
+      /*
       final AtomicReference<Connection> conn = new AtomicReference<>();
       final CountDownLatch connStarted = new CountDownLatch(1);
 
@@ -97,6 +100,7 @@ public class ConnectionHangOnStartupTest extends OpenwireArtemisBaseTest {
       //createSlave();
 
       conn.get().stop();
+      */
    }
 
 }

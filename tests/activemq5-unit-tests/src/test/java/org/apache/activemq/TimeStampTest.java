@@ -26,6 +26,7 @@ import javax.jms.Session;
 
 import junit.framework.TestCase;
 
+import org.apache.activemq.artemiswrapper.ArtemisBrokerHelper;
 import org.apache.activemq.broker.BrokerPlugin;
 import org.apache.activemq.broker.BrokerService;
 import org.apache.activemq.broker.TransportConnector;
@@ -35,12 +36,12 @@ import org.apache.activemq.broker.view.ConnectionDotFilePlugin;
 public class TimeStampTest extends TestCase {
 
    @Override
-   public void setUp() {
+   public void setUp() throws Exception {
       BrokerService.disableWrapper = true;
    }
-
    @Override
    public void tearDown() {
+      ArtemisBrokerHelper.stopArtemisBroker();
       BrokerService.disableWrapper = false;
    }
 
@@ -101,6 +102,5 @@ public class TimeStampTest extends TestCase {
       consumer.close();
       session.close();
       connection.close();
-      broker.stop();
    }
 }
